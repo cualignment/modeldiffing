@@ -1,1 +1,1 @@
-from preprocess import preprocess
+from .preprocessing import make_preprocessor

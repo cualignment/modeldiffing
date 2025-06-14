@@ -1,6 +1,8 @@
 *json
 output/
-.venv/
-.vscode/
+data/
+env/
+venv/
+vscode/
 __pycache__/
 papers/

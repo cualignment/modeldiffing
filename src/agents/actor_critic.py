@@ -14,6 +14,7 @@ class Agent:
         self.actor = AutoModelForCausalLM.from_pretrained(
             self.name
         )
+
         self.freeze_actor_except_lm_head()
 
         self.critic = AutoModel.from_pretrained(
@@ -38,15 +39,21 @@ class Agent:
             self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
             self.actor.resize_token_embeddings(len(self.tokenizer))
             self.critic.resize_token_embeddings(len(self.tokenizer))
+            self.reference.resize_token_embeddings(len(self.tokenizer))
 
-        self.actor.eval()
         self.critic.eval()
+        self.reference.eval()
 
     def freeze_actor_except_lm_head(self):
         for name, param in self.actor.named_parameters():
-            # Only keep gradients for the final lm_head layer
+            print(name)
             if "lm_head" not in name:
                 param.requires_grad = False
+            else:
+                print(f"✅ Keeping {name} trainable")
+
+        assert 0
+
 
 
     def generate(self, prompts: list[str], tokenize: bool = False, max_new_tokens: int = 256, do_sample: bool = True, temperature: float = 0.17, top_k: int = 50, top_p: float = 0.9, num_return_sequences: int = 1) -> list[str]:
@@ -85,7 +92,8 @@ class Agent:
         all_new_ids = []                              # ← use a different name
         for seq in gen_ids:
             # extract just the non-pad token IDs for this sequence
-            seq_ids = seq[seq != pad_id].tolist()
+            seq_ids = [t for t in seq[seq != pad_id].tolist() if t < self.actor.config.vocab_size]
+
             all_new_ids.append(seq_ids)
 
         return self.tokenizer.batch_decode(out_ids, skip_special_tokens=True), all_new_ids

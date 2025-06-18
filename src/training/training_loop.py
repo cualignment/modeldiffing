@@ -98,8 +98,10 @@ for batch in loader:
     logits     = outputs.logits[:, P:, :]                          # [B, T, V]
     log_probs  = torch.log_softmax(logits, dim=-1)                 # [B, T, V]
     actions    = new_ids                                           # [B, T]
-    actor_log_probs = log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)  # [B, T]
+    vocab_size = log_probs.shape[-1]
 
+    actor_log_probs = log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)  # [B, T]
+    print(f"Actor Log {log_probs.requires_grad}")
     with torch.no_grad():
         ref_logits = agent.reference(
             input_ids=full_input_ids,
@@ -116,15 +118,16 @@ for batch in loader:
 
     unclipped = ratio * advantages
     clipped   = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
-    ppo_loss  = -torch.min(unclipped, clipped)
-    ppo_loss  = (ppo_loss * gen_mask).sum() / gen_mask.sum()
+    assert clipped.requires_grad, "bing bong Loss must require gradient for backpropagation"
+    loss  = -torch.min(unclipped, clipped)
+    loss  = (loss * gen_mask).sum() / gen_mask.sum()
 
     # === 9. Optional: Entropy bonus ===
     # entropy = -(log_probs * torch.exp(log_probs)).sum(dim=-1)  # [B, T]
     # entropy_bonus = (entropy * gen_mask).sum() / gen_mask.sum()
-    # total_loss = ppo_loss - 0.01 * entropy_bonus
-
+    # loss = loss - 0.01 * entropy_bonus
+    assert loss.requires_grad, "Loss must require gradient for backpropagation"
     optimizer_actor.zero_grad()
-    total_loss.backward()
+    loss.backward()
     optimizer_actor.step()
-    print(f"PPO Loss: {ppo_loss.item():.4f}")
+    print(f"PPO Loss: {loss.item():.4f}")

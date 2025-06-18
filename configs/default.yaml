@@ -1,12 +1,17 @@
-model:
-  name: "meta-llama/Llama-3.2-1B-Instruct"
-
-training_data:
-  name: "openai/gsm8k"
-  subset: "main"
-  split: "train"
-
-training:
-  learning_rate: 0.001
-  epochs:        50
-  optimizer:     "adam"
+script_args:
+  dataset_name: "your/ds"
+  dataset_train_split: "train"
+  eval_samples: 100
+  dataset_text_field: "prompt"
+training_args:
+  output_dir: "models/ppo"
+  reward_model_path: "..."
+  sft_model_path: "..."
+  total_episodes: 10_000
+  push_to_hub: false
+  # …and any other PPOConfig / ScriptArguments fields you need
+model_args:
+  model_name_or_path: "meta-llama/Llama-3.2-1B"
+  trust_remote_code: true
+  torch_dtype: "auto"
+  # …quantization, PEFT, etc.

@@ -41,7 +41,6 @@ def check_answer(generation, answer, eps=1e-3):
         if check_format(g):
             r += 0.25
         numerical_answer = get_numerical_answer(g)
-        print(f"numerical answer: {numerical_answer}, expected: {a}, eps: {eps}")
         if numerical_answer is not None and abs(numerical_answer - a) < eps:
             r += 0.75
         reward[idx] = r

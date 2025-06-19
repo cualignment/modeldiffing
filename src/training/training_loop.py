@@ -1,5 +1,7 @@
 import re
 import torch
+import wandb
+import numpy as np
 from datasets import load_dataset
 from transformers import AutoTokenizer
 from torch.utils.data import DataLoader
@@ -8,29 +10,89 @@ from src.agents import Agent
 from src.rewards import check_answer
 from transformers import DataCollatorWithPadding
 
+def evaluate_agent(agent, device, split="train", num_batches=25, batch_size=8):
+    from datasets import load_dataset
+    from transformers import DataCollatorWithPadding
+    from torch.utils.data import DataLoader
+    from src.utils import make_preprocessor
+    from src.rewards import check_answer
+    import torch
+    import numpy as np
+
+    agent.actor.eval()
+
+    preprocess = make_preprocessor(agent.tokenizer, max_length=128)
+    ds = load_dataset("gsm8k", "main", split=split, cache_dir="data/gsm8k")
+    tokenized = ds.map(preprocess, batched=True, remove_columns=ds.column_names)
+    tokenized.set_format(type="torch", columns=["input_ids", "attention_mask", "labels"])
+
+    data_collator = DataCollatorWithPadding(agent.tokenizer)
+    loader = DataLoader(tokenized, batch_size=batch_size, collate_fn=data_collator)
+
+    all_rewards = []
+
+    for i, batch in enumerate(loader):
+        if i >= num_batches:
+            break
+        prompt_ids  = batch["input_ids"].to(device)
+        prompt_mask = batch["attention_mask"].to(device)
+
+        with torch.no_grad():
+            traj, _ = agent.generate({
+                "input_ids": prompt_ids,
+                "attention_mask": prompt_mask
+            })
+
+        completions = [t.split("{{#assistant}}")[3].strip() for t in traj]
+        rewards = check_answer(completions, batch["labels"])
+        all_rewards.extend(rewards)
+
+    avg_reward = np.mean(all_rewards)
+    wandb.log({"eval_avg_reward": avg_reward})
+    print(f"[Eval] Average Reward over {num_batches} batches: {avg_reward:.4f}")
+    return avg_reward
+
 # TODO get args from yaml
-batch_size = 4
+batch_size = 8
 epochs = 1
 shuffle = True
 gamma = 0.8
 device = "cuda"
-lr = 1e-4
+lr_actor = 1e-6
+lr_critic = 1e-4
+
+wandb.init(
+    project="ppo-llama3",                   # You can keep or rename
+    entity="WanderingInductionHeads",       # <- THIS IS THE TEAM NAME, not the org
+    name="ppo-llama3-run",
+    config={
+        "model": "meta-llama/Llama-3.2-1B-Instruct",
+        "batch_size": batch_size,
+        "epochs": epochs,
+        "lr_actor": lr_actor,
+        "lr_critic": lr_critic,
+        "gamma": gamma
+    }
+)
 
 agent = Agent("meta-llama/Llama-3.2-1B-Instruct", device)
 
 preprocess = make_preprocessor(agent.tokenizer, max_length=128)
 
-ds = load_dataset("gsm8k", "main", split="train", cache_dir=...)
+ds = load_dataset("gsm8k", "main", split="train", cache_dir="data/gsm8k")
 tokenized = ds.map(preprocess, batched=True, remove_columns=ds.column_names)
 tokenized.set_format(type="torch", columns=["input_ids","attention_mask","labels"])
 
 data_collator = DataCollatorWithPadding(agent.tokenizer)
 loader = DataLoader(tokenized, batch_size=batch_size, collate_fn=data_collator, shuffle=shuffle)
 
-optimizer_actor = torch.optim.Adam(agent.actor.parameters(), lr=1e-6)
-optimizer_critic = torch.optim.Adam(agent.value_head.parameters(), lr=1e-4)
+optimizer_actor = torch.optim.Adam(agent.actor.parameters(), lr=lr_actor)
+optimizer_critic = torch.optim.Adam(agent.value_head.parameters(), lr=lr_critic)
 
-for batch in loader:
+evaluate_agent(agent, device)
+
+for idx, batch in enumerate(loader):
+    print(f"Batch [{idx+1}]/[{len(loader)}]")
     # === 1. Prepare inputs ===
     prompt_ids  = batch["input_ids"].to(device)      # [B, P]
     prompt_mask = batch["attention_mask"].to(device) # [B, P]
@@ -46,6 +108,10 @@ for batch in loader:
     lengths  = [len(seq) for seq in new_seqs]
     max_len  = max(lengths)
     gamma    = 0.99
+
+    wandb.log({"average_rewards": np.mean(rewards)})
+    wandb.log({"average_lengths": np.mean(lengths)})
+    wandb.log({"max_length": max_len})
 
     # === 3. Compute discounted returns G ===
     all_returns = []
@@ -81,7 +147,8 @@ for batch in loader:
     critic_loss = ((values - G)**2 * gen_mask).sum() / gen_mask.sum()
     critic_loss.backward()
     optimizer_critic.step()
-    print(f"Critic MSE: {critic_loss.item():.4f}")
+    # print(f"Critic MSE: {critic_loss.item():.4f}")
+    wandb.log({"critic_mse": critic_loss.item()})
 
     # === 6. Compute Advantage ===
     values     = values.detach()
@@ -101,7 +168,7 @@ for batch in loader:
     vocab_size = log_probs.shape[-1]
 
     actor_log_probs = log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)  # [B, T]
-    print(f"Actor Log {log_probs.requires_grad}")
+    
     with torch.no_grad():
         ref_logits = agent.reference(
             input_ids=full_input_ids,
@@ -118,7 +185,6 @@ for batch in loader:
 
     unclipped = ratio * advantages
     clipped   = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
-    assert clipped.requires_grad, "bing bong Loss must require gradient for backpropagation"
     loss  = -torch.min(unclipped, clipped)
     loss  = (loss * gen_mask).sum() / gen_mask.sum()
 
@@ -126,8 +192,13 @@ for batch in loader:
     # entropy = -(log_probs * torch.exp(log_probs)).sum(dim=-1)  # [B, T]
     # entropy_bonus = (entropy * gen_mask).sum() / gen_mask.sum()
     # loss = loss - 0.01 * entropy_bonus
-    assert loss.requires_grad, "Loss must require gradient for backpropagation"
     optimizer_actor.zero_grad()
     loss.backward()
     optimizer_actor.step()
-    print(f"PPO Loss: {loss.item():.4f}")
+    # print(f"PPO Loss: {loss.item():.4f}")
+    wandb.log({"ppo_loss": loss.item()})
+    if (idx + 1) % 100 == 0:
+        break
+
+evaluate_agent(agent, device)
+wandb.finish()

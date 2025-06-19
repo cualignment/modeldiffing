@@ -15,7 +15,7 @@ class Agent:
             self.name
         )
 
-        self.freeze_actor_except_lm_head()
+        self.freeze_all_except_last_block()
 
         self.critic = AutoModel.from_pretrained(
             self.name
@@ -44,17 +44,13 @@ class Agent:
         self.critic.eval()
         self.reference.eval()
 
-    def freeze_actor_except_lm_head(self):
+    def freeze_all_except_last_block(self):
+        # Unfreeze last transformer block
         for name, param in self.actor.named_parameters():
-            print(name)
-            if "lm_head" not in name:
-                param.requires_grad = False
+            if name.startswith("model.layers.15"):  # or whatever your last layer is
+                param.requires_grad = True
             else:
-                print(f"✅ Keeping {name} trainable")
-
-        assert 0
-
-
+                param.requires_grad = False
 
     def generate(self, prompts: list[str], tokenize: bool = False, max_new_tokens: int = 256, do_sample: bool = True, temperature: float = 0.17, top_k: int = 50, top_p: float = 0.9, num_return_sequences: int = 1) -> list[str]:
         # batch-tokenize (now using a real pad token)

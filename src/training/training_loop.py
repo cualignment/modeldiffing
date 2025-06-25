@@ -56,9 +56,9 @@ def evaluate_agent(agent, device, split="train", num_batches=25, batch_size=8):
 batch_size = 8
 epochs = 1
 shuffle = True
-gamma = 0.8
+gamma = 0.99
 device = "cuda"
-lr_actor = 1e-6
+lr_actor = 5e-6
 lr_critic = 1e-4
 
 wandb.init(
@@ -119,6 +119,7 @@ for idx, batch in enumerate(loader):
         ret = [(gamma ** (L - t - 1)) * r for t in range(L)]
         ret += [0.0] * (max_len - L)
         all_returns.append(ret)
+
     G = torch.tensor(all_returns, dtype=torch.float32, device=device)  # [B, max_len]
 
     # === 4. Build generated input tensor ===
@@ -128,7 +129,7 @@ for idx, batch in enumerate(loader):
         new_ids[i, :len(seq)] = torch.tensor(seq, device=device)
 
     full_input_ids      = torch.cat([prompt_ids, new_ids], dim=1)         # [B, P+T]
-    gen_mask            = (new_ids != pad_id).long()                      # [B, T]
+    gen_mask = (new_ids != pad_id)  # [B, T], dtype=bool
     full_attention_mask = torch.cat([prompt_mask, gen_mask], dim=1)       # [B, P+T]
 
     # === 5. Train Critic ===
@@ -144,7 +145,9 @@ for idx, batch in enumerate(loader):
     gen_hidden = hidden[:, P:, :]           # [B, T, H]
     values     = agent.get_values(gen_hidden)  # [B, T]
 
-    critic_loss = ((values - G)**2 * gen_mask).sum() / gen_mask.sum()
+    critic_loss = torch.nn.functional.mse_loss(
+        values[gen_mask], G[gen_mask], reduction="mean"
+    )
     critic_loss.backward()
     optimizer_critic.step()
     # print(f"Critic MSE: {critic_loss.item():.4f}")
@@ -152,10 +155,33 @@ for idx, batch in enumerate(loader):
 
     # === 6. Compute Advantage ===
     values     = values.detach()
-    advantages = (G - values) * gen_mask
+
+    # Compute GAE estimate for advantages
+    lambda_ = 0.95
+    advantages = torch.zeros_like(values)
+
+    for b in range(B):
+        T = lengths[b]
+        adv = 0.0
+        for t in reversed(range(T)):
+            # Get value estimates
+            v_t     = values[b, t]
+            v_next  = values[b, t+1] if t + 1 < T else 0.0
+
+            # Temporal difference
+            delta = G[b, t] - v_t
+
+            # GAE recursion
+            adv = delta + gamma * lambda_ * adv
+            advantages[b, t] = adv
+
+    # Optionally normalize advantages
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-    # === 7. Train Actor ===
+    # Masked to zero out padded tokens
+    advantages[~gen_mask] = 0.0
+
+    # === 8. Train Actor ===
     agent.actor.train()
     outputs = agent.actor(
         input_ids=full_input_ids,
@@ -178,26 +204,44 @@ for idx, batch in enumerate(loader):
         ref_log_probs = torch.log_softmax(ref_logits, dim=-1)
         ref_log_probs = ref_log_probs.gather(2, actions.unsqueeze(-1)).squeeze(-1)
 
-    # === 8. PPO Clipped Loss ===
+    # === 9. PPO Clipped Loss ===
     log_ratio = actor_log_probs - ref_log_probs     # [B, T]
     ratio     = torch.exp(log_ratio)
-    clip_eps  = 0.2
+    clip_eps  = 0.1
 
     unclipped = ratio * advantages
     clipped   = torch.clamp(ratio, 1 - clip_eps, 1 + clip_eps) * advantages
-    loss  = -torch.min(unclipped, clipped)
-    loss  = (loss * gen_mask).sum() / gen_mask.sum()
+    
+    loss = -torch.min(unclipped, clipped)
+    if gen_mask.any():
+        loss = loss[gen_mask].mean()
+    else:
+        continue
 
-    # === 9. Optional: Entropy bonus ===
+    # === 10. Optional: Entropy bonus ===
     # entropy = -(log_probs * torch.exp(log_probs)).sum(dim=-1)  # [B, T]
     # entropy_bonus = (entropy * gen_mask).sum() / gen_mask.sum()
     # loss = loss - 0.01 * entropy_bonus
+    
     optimizer_actor.zero_grad()
     loss.backward()
     optimizer_actor.step()
-    # print(f"PPO Loss: {loss.item():.4f}")
-    wandb.log({"ppo_loss": loss.item()})
-    if (idx + 1) % 100 == 0:
+
+    wandb.log({
+        "ppo_loss": loss.item(), 
+        "critic_loss": critic_loss.item(),
+        "pad_ratio": (~gen_mask).sum().item() / gen_mask.numel(),
+        "adv_mean": advantages.mean().item(),
+        "adv_std": advantages.std().item(),
+        "reward_mean": np.mean(rewards),
+        "reward_std": np.std(rewards),
+        "ratio_mean": ratio[gen_mask].mean().item(),
+        "ratio_std": ratio[gen_mask].std().item()
+    })
+
+
+
+    if (idx + 1) % 25 == 0:
         break
 
 evaluate_agent(agent, device)

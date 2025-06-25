@@ -1,4 +1,6 @@
-pytorch
+torch
 datasets
-transformer
-yaml
+transformers
+accelerate
+wandb
+huggingface

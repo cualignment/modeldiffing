@@ -15,7 +15,7 @@ class Agent:
             self.name
         )
 
-        self.freeze_all_except_last_block()
+        self.freeze_blocks()
 
         self.critic = AutoModel.from_pretrained(
             self.name
@@ -30,9 +30,13 @@ class Agent:
         self.reference.to(device)
 
         hidden_size = self.critic.config.hidden_size
-        self.value_head = nn.Linear(hidden_size, 1).to(
-            device=self.device,
-        )
+        self.value_head = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),  # or nn.GELU() for smoother activations
+            nn.Linear(hidden_size, hidden_size // 2),
+            nn.ReLU(),
+            nn.Linear(hidden_size // 2, 1)
+        ).to(self.device)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.name, use_fast=True, padding_side="left")
         if self.tokenizer.pad_token is None:
@@ -44,10 +48,10 @@ class Agent:
         self.critic.eval()
         self.reference.eval()
 
-    def freeze_all_except_last_block(self):
+    def freeze_blocks(self):
         # Unfreeze last transformer block
         for name, param in self.actor.named_parameters():
-            if name.startswith("model.layers.15"):  # or whatever your last layer is
+            if name.startswith("model.layers.15") or name.startswith("model.layers.14"):  # or whatever your last layer is
                 param.requires_grad = True
             else:
                 param.requires_grad = False

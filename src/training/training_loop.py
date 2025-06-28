@@ -58,8 +58,9 @@ epochs = 1
 shuffle = True
 gamma = 0.99
 device = "cuda"
-lr_actor = 5e-6
-lr_critic = 1e-4
+lr_actor = 1e-5
+lr_critic = 1e-3
+warmup_steps = 50
 
 wandb.init(
     project="ppo-llama3",                   # You can keep or rename
@@ -153,6 +154,9 @@ for idx, batch in enumerate(loader):
     # print(f"Critic MSE: {critic_loss.item():.4f}")
     wandb.log({"critic_mse": critic_loss.item()})
 
+    if idx <= warmup_steps:
+        continue
+
     # === 6. Compute Advantage ===
     values     = values.detach()
 
@@ -241,7 +245,7 @@ for idx, batch in enumerate(loader):
 
 
 
-    if (idx + 1) % 25 == 0:
+    if (idx + 1) % 100 == 0:
         break
 
 evaluate_agent(agent, device)

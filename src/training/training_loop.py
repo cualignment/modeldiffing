@@ -63,8 +63,8 @@ lr_critic = 1e-3
 warmup_steps = 50
 
 wandb.init(
-    project="ppo-llama3",                   # You can keep or rename
-    entity="WanderingInductionHeads",       # <- THIS IS THE TEAM NAME, not the org
+    project="ppo-llama3",
+    entity="WanderingInductionHeads",
     name="ppo-llama3-run",
     config={
         "model": "meta-llama/Llama-3.2-1B-Instruct",
@@ -223,9 +223,9 @@ for idx, batch in enumerate(loader):
         continue
 
     # === 10. Optional: Entropy bonus ===
-    # entropy = -(log_probs * torch.exp(log_probs)).sum(dim=-1)  # [B, T]
-    # entropy_bonus = (entropy * gen_mask).sum() / gen_mask.sum()
-    # loss = loss - 0.01 * entropy_bonus
+    entropy = -(log_probs * torch.exp(log_probs)).sum(dim=-1)  # [B, T]
+    entropy_bonus = (entropy * gen_mask).sum() / gen_mask.sum()
+    loss = loss - 0.01 * entropy_bonus
     
     optimizer_actor.zero_grad()
     loss.backward()
@@ -233,6 +233,7 @@ for idx, batch in enumerate(loader):
 
     wandb.log({
         "ppo_loss": loss.item(), 
+        "entropy_bonus": entropy_bonus.item(),
         "critic_loss": critic_loss.item(),
         "pad_ratio": (~gen_mask).sum().item() / gen_mask.numel(),
         "adv_mean": advantages.mean().item(),
@@ -242,11 +243,6 @@ for idx, batch in enumerate(loader):
         "ratio_mean": ratio[gen_mask].mean().item(),
         "ratio_std": ratio[gen_mask].std().item()
     })
-
-
-
-    if (idx + 1) % 100 == 0:
-        break
 
 evaluate_agent(agent, device)
 wandb.finish()

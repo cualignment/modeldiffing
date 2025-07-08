@@ -7,7 +7,7 @@ import torch.nn as nn
 import torch
 
 class Agent:
-    def __init__(self, model_name, device):
+    def __init__(self, model_name, init_critic=False, device="cuda"):
         self.name = model_name
         self.device = device
         
@@ -17,35 +17,38 @@ class Agent:
 
         self.freeze_blocks()
 
-        self.critic = AutoModel.from_pretrained(
-            self.name
-        )
+        if init_critic:
+            self.critic = AutoModel.from_pretrained(
+                self.name
+            )
 
         self.reference = AutoModelForCausalLM.from_pretrained(
             self.name
         )
 
         self.actor.to(self.device)
-        self.critic.to(self.device)
+        self.critic.to(self.device) if init_critic else None
         self.reference.to(device)
 
-        hidden_size = self.critic.config.hidden_size
-        self.value_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.ReLU(),  # or nn.GELU() for smoother activations
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.ReLU(),
-            nn.Linear(hidden_size // 2, 1)
-        ).to(self.device)
+        if init_critic:
+            hidden_size = self.critic.config.hidden_size
+            self.value_head = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size),
+                nn.ReLU(),  # or nn.GELU() for smoother activations
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_size // 2, 1)
+            ).to(self.device)
 
         self.tokenizer = AutoTokenizer.from_pretrained(self.name, use_fast=True, padding_side="left")
         if self.tokenizer.pad_token is None:
             self.tokenizer.add_special_tokens({"pad_token": "<pad>"})
             self.actor.resize_token_embeddings(len(self.tokenizer))
-            self.critic.resize_token_embeddings(len(self.tokenizer))
+            self.critic.resize_token_embeddings(len(self.tokenizer)) if init_critic else None
             self.reference.resize_token_embeddings(len(self.tokenizer))
 
-        self.critic.eval()
+
+        self.critic.eval() if init_critic else None
         self.reference.eval()
 
     def freeze_blocks(self):

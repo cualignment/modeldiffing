@@ -148,6 +148,6 @@ PPO is basically:
 
 ## References 
 
-[^1]: Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). *Proximal Policy Optimization Algorithms*. arXiv:1707.06347. https://arxiv.org/abs/1707.06347  
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O. (2017). *Proximal Policy Optimization Algorithms*. arXiv:1707.06347. https://arxiv.org/abs/1707.06347  
 
-[^2]: OpenAI Spinning Up. *Proximal Policy Optimization*. https://spinningup.openai.com/en/latest/algorithms/ppo.html  
+OpenAI Spinning Up. *Proximal Policy Optimization*. https://spinningup.openai.com/en/latest/algorithms/ppo.html  
